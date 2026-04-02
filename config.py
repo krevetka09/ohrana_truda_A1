@@ -1,9 +1,9 @@
 TOTAL_QUESTIONS = 20
-PASS_THRESHOLD = 15
+PASS_THRESHOLD = 18
 
 RESULTS_FILE = 'results.csv'
 STATISTIC_FILE = 'statistic.csv'
-QUESTIONS_FILE = 'questions.csv'  # Имя вашего файла с базой вопросов
+QUESTIONS_FILE = 'questionsA1.csv'  # Имя вашего файла с базой вопросов
 
 # Цветовая схема
 COLOR_CORRECT = "#32CD32"   # Зеленый

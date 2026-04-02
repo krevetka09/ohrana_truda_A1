@@ -5,7 +5,7 @@ from ui_main import MainWindow
 
 def main():
     DataManager.init_files()
-    app = QApplication(sys.argv)
+    app = QApplication(sys.argv) 
     app.setStyle("Fusion")
     
     window = MainWindow()

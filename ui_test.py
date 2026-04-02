@@ -1,10 +1,54 @@
+from datetime import datetime
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QLabel, QListWidget, QListWidgetItem, QRadioButton, 
-                             QButtonGroup, QMessageBox, QWidget)
+                             QLabel, QListWidget, QListWidgetItem, QCheckBox, 
+                             QMessageBox, QWidget, QSizePolicy)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from data_manager import DataManager
 import config
+
+class OptionWidget(QWidget):
+    """Виджет варианта ответа на базе QCheckBox"""
+    def __init__(self, parent=None, on_toggle_callback=None):
+        super().__init__(parent)
+        self.on_toggle_callback = on_toggle_callback
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.checkbox = QCheckBox()
+        self.checkbox.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.checkbox.stateChanged.connect(self._on_state_changed)
+        
+        self.label = QLabel()
+        self.label.setWordWrap(True)
+        self.label.setFont(QFont("Arial", 12))
+        self.label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        
+        self.layout.addWidget(self.checkbox)
+        self.layout.addWidget(self.label)
+        self.label.mousePressEvent = self._label_clicked
+        
+    def _on_state_changed(self, state):
+        if self.on_toggle_callback:
+            self.on_toggle_callback()
+
+    def _label_clicked(self, event):
+        if self.checkbox.isEnabled():
+            self.checkbox.setChecked(not self.checkbox.isChecked())
+            
+    def setText(self, text):
+        self.label.setText(text)
+        
+    def setEnabled(self, enabled):
+        self.checkbox.setEnabled(enabled)
+        
+    def setChecked(self, checked):
+        self.checkbox.blockSignals(True)
+        self.checkbox.setChecked(checked)
+        self.checkbox.blockSignals(False)
+
+    def isChecked(self):
+        return self.checkbox.isChecked()
 
 class TestingWindow(QDialog):
     def __init__(self, parent=None, is_readonly=False, test_data=None):
@@ -15,6 +59,7 @@ class TestingWindow(QDialog):
         self.is_readonly = is_readonly
         self.test_data = test_data
         self.all_questions_pool = DataManager.load_questions()
+        self.start_time = None if self.is_readonly else datetime.now()
         
         if self.is_readonly and self.test_data:
             self.questions = []
@@ -33,7 +78,7 @@ class TestingWindow(QDialog):
             self.answers = {int(k): v for k, v in self.test_data['details'].items()}
             
         self.current_q_index = 0
-        self.radio_buttons = []
+        self.option_widgets = []
         self.init_ui()
         
         if self.questions:
@@ -43,8 +88,6 @@ class TestingWindow(QDialog):
 
     def init_ui(self):
         main_layout = QHBoxLayout(self)
-        
-        # Список вопросов
         left_panel = QVBoxLayout()
         self.question_list = QListWidget()
         self.question_list.currentRowChanged.connect(self.load_question)
@@ -53,21 +96,18 @@ class TestingWindow(QDialog):
             item = QListWidgetItem(f"Вопрос №{i+1}")
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             item.setBackground(QColor("#FFFFFF"))
-            
             if self.is_readonly:
                 q_id = self.questions[i]['id']
-                status = self.answers.get(q_id, {}).get('status')
-                if status == 'correct':
+                score = self.answers.get(q_id, {}).get('score', 0)
+                if score >= 1.0:
                     item.setBackground(QColor(config.COLOR_CORRECT))
-                elif status == 'incorrect':
-                    item.setBackground(QColor(config.COLOR_INCORRECT))
+                elif score > 0:
+                    item.setBackground(QColor("#FFF176")) # Желтый для частичных
                 else:
-                    item.setBackground(QColor(config.COLOR_UNANSWERED))
-                
+                    item.setBackground(QColor(config.COLOR_INCORRECT))
             self.question_list.addItem(item)
             
         left_panel.addWidget(self.question_list)
-        
         if not self.is_readonly:
             self.btn_finish = QPushButton("Завершить тестирование")
             self.btn_finish.setStyleSheet("background-color: #64B5F6; font-weight: bold; padding: 10px;")
@@ -79,23 +119,19 @@ class TestingWindow(QDialog):
         left_container.setFixedWidth(250)
         main_layout.addWidget(left_container)
         
-        # Область вопроса
         right_panel = QVBoxLayout()
-        self.lbl_question_text = QLabel("Текст вопроса")
+        self.lbl_question_text = QLabel()
         self.lbl_question_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_question_text.setFont(QFont("Arial", 14))
         self.lbl_question_text.setWordWrap(True)
         self.lbl_question_text.setStyleSheet("border: 1px solid gray; padding: 20px; background-color: white;")
         right_panel.addWidget(self.lbl_question_text)
         
-        # Контейнер для вариантов ответов
         self.options_layout = QVBoxLayout()
         self.options_layout.setSpacing(10)
         self.options_layout.setContentsMargins(50, 20, 50, 20)
-        self.radio_group = QButtonGroup(self)
         right_panel.addLayout(self.options_layout)
         
-        # Информационная метка для правильного ответа (режим просмотра)
         self.lbl_correct_info = QLabel("")
         self.lbl_correct_info.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         self.lbl_correct_info.setStyleSheet(f"color: {config.COLOR_CORRECT}; padding: 10px; border: 1px dashed {config.COLOR_CORRECT}; border-radius: 5px;")
@@ -105,7 +141,6 @@ class TestingWindow(QDialog):
         
         right_panel.addStretch()
         
-        # Кнопки управления
         controls_layout = QHBoxLayout()
         self.btn_prev = QPushButton("<")
         self.btn_prev.setFixedSize(60, 40)
@@ -139,95 +174,97 @@ class TestingWindow(QDialog):
         right_container.setLayout(right_panel)
         main_layout.addWidget(right_container)
 
+    def update_selection_limit(self):
+        """Ограничивает выбор: нельзя выбрать больше, чем есть правильных ответов"""
+        if self.is_readonly: return
+        
+        q = self.questions[self.current_q_index]
+        max_allowed = len(q['correct_indices'])
+        checked_count = sum(1 for w in self.option_widgets if w.isVisible() and w.isChecked())
+        
+        for w in self.option_widgets:
+            if not w.isChecked():
+                w.setEnabled(checked_count < max_allowed)
+
     def load_question(self, index):
-        if index < 0 or index >= len(self.questions):
-            return
-            
+        if index < 0 or index >= len(self.questions): return
         self.current_q_index = index
         q = self.questions[index]
         self.lbl_question_text.setText(q['text'])
         
-        # Управление видимостью правильного ответа
         if self.is_readonly:
             q_id = q['id']
-            ans_status = self.answers.get(q_id, {}).get('status')
-            if ans_status in ['incorrect', 'unanswered']:
-                correct_text = q['options'][q['correct']]
-                self.lbl_correct_info.setText(f"Правильный ответ: {correct_text}")
+            ans_data = self.answers.get(q_id, {})
+            if ans_data.get('score', 0) < 1.0:
+                correct_texts = [q['options'][i] for i in q['correct_indices']]
+                self.lbl_correct_info.setText(f"Правильные ответы: \n{'\n'.join(correct_texts)}")
                 self.lbl_correct_info.show()
             else:
                 self.lbl_correct_info.hide()
-        else:
-            self.lbl_correct_info.hide()
 
-        # Обновление радио-кнопок
-        for rb in self.radio_buttons:
-            rb.hide()
-            self.radio_group.removeButton(rb)
-        
-        for i, opt_text in enumerate(q['options']):
-            if i < len(self.radio_buttons):
-                rb = self.radio_buttons[i]
-                rb.show()
-            else:
-                rb = QRadioButton()
-                rb.setFont(QFont("Arial", 12))
-                self.options_layout.addWidget(rb)
-                self.radio_buttons.append(rb)
-            
-            rb.setText(opt_text)
-            self.radio_group.addButton(rb, i)
-            
-            q_id = q['id']
-            is_confirmed = q_id in self.answers and self.answers[q_id].get('confirmed', False)
-            rb.setEnabled(not self.is_readonly and not is_confirmed)
-
-        self.radio_group.setExclusive(False)
-        for rb in self.radio_buttons:
-            rb.setChecked(False)
-        self.radio_group.setExclusive(True)
+        for w in self.option_widgets: w.hide()
         
         q_id = q['id']
-        if q_id in self.answers:
-            sel_idx = self.answers[q_id]['selected']
-            if sel_idx != -1 and sel_idx < len(q['options']):
-                self.radio_buttons[sel_idx].setChecked(True)
-        
-        can_edit = not self.is_readonly and not (q_id in self.answers and self.answers[q_id].get('confirmed', False))
-        self.btn_confirm.setEnabled(can_edit)
-        self.btn_clear.setEnabled(can_edit)
+        is_confirmed = q_id in self.answers and self.answers[q_id].get('confirmed', False)
+
+        for i, opt_text in enumerate(q['options']):
+            if i < len(self.option_widgets):
+                w = self.option_widgets[i]
+                w.show()
+            else:
+                w = OptionWidget(on_toggle_callback=self.update_selection_limit)
+                self.options_layout.addWidget(w)
+                self.option_widgets.append(w)
+            
+            w.setText(opt_text)
+            w.setEnabled(not self.is_readonly and not is_confirmed)
+            
+            selected_list = self.answers.get(q_id, {}).get('selected', [])
+            w.setChecked(i in selected_list)
+
+        self.update_selection_limit()
+        self.btn_confirm.setEnabled(not self.is_readonly and not is_confirmed)
+        self.btn_clear.setEnabled(not self.is_readonly and not is_confirmed)
 
     def confirm_answer(self):
-        selected_id = self.radio_group.checkedId()
-        if selected_id == -1:
-            return
+        selected_indices = [i for i, w in enumerate(self.option_widgets) if w.isVisible() and w.isChecked()]
+        if not selected_indices: return
             
         q = self.questions[self.current_q_index]
-        is_correct = (selected_id == q['correct'])
-        status = 'correct' if is_correct else 'incorrect'
+        correct_indices = q['correct_indices']
+        
+        # Расчет баллов: 1 / кол-во_правильных за каждый верный выбор
+        points_per_one = 1.0 / len(correct_indices)
+        correct_selected = sum(1 for idx in selected_indices if idx in correct_indices)
+        
+        score = round(correct_selected * points_per_one, 2)
+        if score > 0.98: score = 1.0 # Округление до целого при всех верных
         
         self.answers[q['id']] = {
-            "selected": selected_id,
-            "status": status,
+            "selected": selected_indices,
+            "score": score,
+            "status": 'correct' if score >= 1.0 else 'incorrect',
             "confirmed": True
         }
         
         item = self.question_list.item(self.current_q_index)
-        item.setBackground(QColor(config.COLOR_CORRECT) if is_correct else QColor(config.COLOR_INCORRECT))
+        if score >= 1.0:
+            item.setBackground(QColor(config.COLOR_CORRECT))
+        elif score > 0:
+            item.setBackground(QColor("#FFF176"))
+        else:
+            item.setBackground(QColor(config.COLOR_INCORRECT))
         
-        # Автоматический переход к следующему вопросу
         next_idx = self.current_q_index + 1
         if next_idx < len(self.questions):
             self.question_list.setCurrentRow(next_idx)
         else:
-            # Если это последний вопрос, просто обновляем текущий вид
             self.load_question(self.current_q_index)
 
     def clear_selection(self):
-        self.radio_group.setExclusive(False)
-        for rb in self.radio_buttons:
-            rb.setChecked(False)
-        self.radio_group.setExclusive(True)
+        for w in self.option_widgets:
+            w.setChecked(False)
+            w.setEnabled(True)
 
     def finish_testing(self):
         unanswered_indices = []
@@ -236,37 +273,30 @@ class TestingWindow(QDialog):
                 unanswered_indices.append(i)
                 
         if unanswered_indices:
-            q_nums = ", ".join([str(i + 1) for i in unanswered_indices])
-            msg = f"Вы не подтвердили ответ на следующие вопросы:\n{q_nums}\n\nЗавершить тестирование?"
-            reply = QMessageBox.warning(self, "Предупреждение", msg, 
-                                        QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
-            if reply == QMessageBox.StandardButton.Cancel:
-                return
-        else:
-            msg = "Вы дали ответы на все вопросы, хотите завершить тестирование?"
-            reply = QMessageBox.question(self, "Завершение", msg,
-                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.No:
+            msg = f"Вы не подтвердили ответ на некоторые вопросы. Завершить?"
+            if QMessageBox.warning(self, "Предупреждение", msg, QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel) == QMessageBox.StandardButton.Cancel:
                 return
 
         final_details = {}
-        correct_count = 0
+        total_score = 0.0
         
         for i, q in enumerate(self.questions):
             q_id = q['id']
             if q_id in self.answers and self.answers[q_id].get('confirmed', False):
                 final_details[q_id] = self.answers[q_id]
-                if self.answers[q_id]['status'] == 'correct':
-                    correct_count += 1
+                total_score += self.answers[q_id]['score']
             else:
-                final_details[q_id] = {"selected": -1, "status": "unanswered", "confirmed": True}
-                self.question_list.item(i).setBackground(QColor(config.COLOR_UNANSWERED))
+                final_details[q_id] = {"selected": [], "score": 0.0, "status": "unanswered", "confirmed": True}
                 
-        passed = correct_count >= config.PASS_THRESHOLD
-        DataManager.save_test_result(passed, final_details)
-        
+        duration_str = "00:00"
+        if self.start_time:
+            elapsed = datetime.now() - self.start_time
+            mins, secs = divmod(int(elapsed.total_seconds()), 60)
+            duration_str = f"{mins:02d}:{secs:02d}"
+
+        passed = total_score >= config.PASS_THRESHOLD
+        DataManager.save_test_result(passed, final_details, duration_str)
         self.accept()
         
         status_text = "пройдено" if passed else "не пройдено"
-        QMessageBox.information(self.parent(), "Результат", 
-                                f"Тестирование {status_text}!\nПравильных ответов: {correct_count} из {len(self.questions)}")
+        QMessageBox.information(self.parent(), "Результат", f"Тестирование {status_text}!\nНабрано баллов: {round(total_score, 2)} из {len(self.questions)}\nВремя: {duration_str}")
